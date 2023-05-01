@@ -2,6 +2,21 @@
  * This file demonstrates the process of starting WebRTC streaming using a KVS Signaling Channel.
  */
 const viewer = {};
+function getTIme(){
+    var now = new Date();
+    var target = document.getElementById("DateTimeDisp");
+
+    var Year = now.getFullYear();
+    var Month = now.getMonth()+1;
+    var DATE = now.getDate();
+    var Hour = now.getHours();
+    var Min = now.getMinutes();
+    var Sec = now.getSeconds();
+
+    var datestring = Year +"/"  + Month + "/" + DATE + ":" + Hour + ":" + Min + ":" + Sec;
+
+    return datestring
+}
 
 async function startViewer(localView, remoteView, formValues, onStatsReport, onRemoteDataMessage) {
     try {
@@ -103,12 +118,12 @@ async function startViewer(localView, remoteView, formValues, onStatsReport, onR
             iceTransportPolicy: formValues.forceTURN ? 'relay' : 'all',
         };
         viewer.peerConnection = new RTCPeerConnection(configuration);
-        if (formValues.openDataChannel) {
-            viewer.dataChannel = viewer.peerConnection.createDataChannel('kvsDataChannel');
-            viewer.peerConnection.ondatachannel = event => {
-                event.channel.onmessage = onRemoteDataMessage;
-            };
-        }
+        //if (formValues.openDataChannel) {
+        viewer.dataChannel = viewer.peerConnection.createDataChannel('kvsDataChannel');
+        viewer.peerConnection.ondatachannel = event => {
+            event.channel.onmessage = onRemoteDataMessage;
+        };
+//        }
 
         // Poll for connection stats
         viewer.peerConnectionStatsInterval = setInterval(() => viewer.peerConnection.getStats().then(onStatsReport), 1000);
@@ -203,6 +218,89 @@ async function startViewer(localView, remoteView, formValues, onStatsReport, onR
     } catch (e) {
         console.error('[VIEWER] Encountered error starting:', e);
     }
+
+    var bytes_sent = 0 ;
+    var bytes_received = 0;
+    // Display Bitrate
+    setInterval( () => {
+        viewer.peerConnection.getStats(null).then(async (stats) => {
+            let statsOutput = "";
+            let speedOutputIn = "<h4> Inbound </h4> <br> \n";
+            let speedOutputOut = "<h4> Outbound </h4> <br> \n";
+            let logspeedin = ""
+            let constraintsOutput = "<h3> Constraints </h3> <br> \n";
+            let bitrate_out = 0;
+            let bitrate_in = 0;
+            stats.forEach((report) => {
+                statsOutput +=
+                    `<h4>Report: ${report.type}</h4>\n<strong>ID:</strong> ${report.id}<br>\n` +
+                    `<strong>Timestamp:</strong> ${report.timestamp}<br>\n`;
+
+                // Now the statistics for this report; we intentionally drop the ones we
+                // sorted to the top above
+
+                Object.keys(report).forEach((statName) => {
+                    if (
+                        statName !== "id" &&
+                            statName !== "timestamp" &&
+                            statName !== "type"
+                    ) {
+                        statsOutput += `<strong>${statName}:</strong> ${report[statName]}<br>\n`;
+                    }
+                });
+
+                if (report.type == "inbound-rtp") {
+                    bitrate_in = (report["bytesReceived"] - bytes_received )*8.0/3.0/1000;
+                    bytes_received = report["bytesReceived"];
+                    speedOutputIn += `<strong>timestamp:</strong> ${report.timestamp}<br>\n`;
+                    speedOutputIn += `<strong>bitrate:</strong> ${bitrate_in}[kbps]<br>\n`;
+                    speedOutputIn += `<strong>bytesReceived:</strong> ${bytes_received}[bytes]<br>\n`;
+                    speedOutputIn += `<strong>width:</strong> ${report["frameWidth"]}<br>\n`;
+                    speedOutputIn += `<strong>height:</strong> ${report["frameHeight"]}<br>\n`;
+                    speedOutputIn += `<strong>fps:</strong> ${report["framesPerSecond"]}<br>\n`;
+                    datestring = getTIme();
+                    logspeedin +=  `${datestring},  ${bitrate_in},  ${bytes_received}, ${report["frameWidth"]}, ${report["frameHeight"]}\n`
+                }
+                else if (report.type == "outbound-rtp") {
+                    bitrate_out = (report["bytesSent"] - bytes_sent )*8.0/3.0/1000;
+                    bytes_sent = report["bytesSent"];
+                    speedOutputOut += `<strong>timestamp:</strong> ${report.timestamp}<br>\n`;
+                    speedOutputOut += `<strong>bitrate:</strong> ${bitrate_out}[kbps]<br>\n`;
+                    speedOutputOut += `<strong>bytesReceived:</strong> ${bytes_sent}[bytes]<br>\n`;
+                    speedOutputOut += `<strong>width:</strong> ${report["frameWidth"]}<br>\n`;
+                    speedOutputOut += `<strong>height:</strong> ${report["frameHeight"]}<br>\n`;
+                    speedOutputOut += `<strong>fps:</strong> ${report["framesPerSecond"]}<br>\n`;                }
+            });
+
+            document.querySelector(".Stats-Inbound").innerHTML = speedOutputIn;
+            document.querySelector(".Stats-Outbound").innerHTML = speedOutputOut;
+            $('#speed_log').append(logspeedin);
+        });
+
+    } , 3000);
+    $('#test-button').click(async () => {
+        let videoTrack = viewer.remoteStream.getVideoTracks()[0];
+        let currentConstraints = videoTrack.getConstraints();
+        let w = 640;
+        let h = 360;
+        if (constraints.video.width.ideal == 640) {
+            w = 1280;
+            h = 720;
+        }
+        videoTrack.applyConstraints({
+            width: {ideal: w},
+            height: {ideal: h},
+            frameRate: {ideal: 30}
+        }).then(() => {
+            currentConstraints = videoTrack.getConstraints();
+            console.log("(w,h) :(", w, ",",h, ') 変更後の値:', currentConstraints);
+            constraints.video = currentConstraints;
+
+        }).catch(e => {
+            console.log('制約を設定できませんでした:', e);
+        });
+    });
+
 }
 
 function stopViewer() {
@@ -248,6 +346,23 @@ function stopViewer() {
         console.error('[VIEWER] Encountered error stopping', e);
     }
 }
+
+$('#resize-button').click(async () => {
+
+    const width = $('#video-width-input').val();
+    const height = $('#video-height-input').val();
+    const bitrate = $('#video-bitrate-input').val();
+    const message =  `${width}, ${height}, ${bitrate}\n`;
+
+    if (viewer.dataChannel) {
+        try {
+            viewer.dataChannel.send(message);
+        } catch (e) {
+            console.error('[VIEWER] Send DataChannel:', e.toString());
+        }
+    }
+});
+
 
 function sendViewerMessage(message) {
     if (viewer.dataChannel) {
